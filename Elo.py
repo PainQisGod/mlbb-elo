@@ -322,6 +322,9 @@ elif app_mode == "🧮 Elo Match Calculator":
                         success_count = 0
                         
                         for idx, row in df.iterrows():
+                            if int(row['score_a']) == int(row['score_b']):
+                                continue
+                                
                             ta_name = str(row['team_a']).strip()
                             tb_name = str(row['team_b']).strip()
                             lg_a = str(row['league_a']).strip()
@@ -395,43 +398,82 @@ elif app_mode == "⚙️ League & Team Management":
                     
         st.markdown("---")
         
-        st.subheader("📝 Rebrand/Rename Registered Team")
+        st.subheader("📝 Rebrand or Merge Registered Team")
         if not team_names_list:
             st.info("No registered teams available to modify.")
         else:
-            old_team_selection = st.selectbox("Select Team to Rebrand:", team_names_list)
-            new_team_name = st.text_input("Enter New Name Designation:", placeholder="e.g. Fnatic ONIC").strip()
+            old_team_selection = st.selectbox("Select Team to Modify:", team_names_list)
             
-            if st.button("🔄 Apply Name Rebrand", use_container_width=True):
-                if not new_team_name:
-                    st.error("❌ New name cannot be blank.")
-                elif new_team_name in team_names_list:
-                    st.error("❌ This team name already exists in database registry.")
-                else:
+            # Choose between simple text rebrand or deep database merge
+            manage_mode = st.radio("Management Type:", ["Simple Rebrand (Change Name)", "Deep Database Merge (Combine Duplicates)"])
+            
+            if manage_mode == "Simple Rebrand (Change Name)":
+                new_team_name = st.text_input("Enter New Name Designation:", placeholder="e.g. Fnatic ONIC").strip()
+                
+                if st.button("🔄 Apply Name Rebrand", use_container_width=True):
+                    if not new_team_name:
+                        st.error("❌ New name cannot be blank.")
+                    elif new_team_name in team_names_list:
+                        st.error("❌ This team name already exists in database registry. Use Merge mode instead!")
+                    else:
+                        db = SessionLocal()
+                        try:
+                            team_obj = db.query(Team).filter(Team.name == old_team_selection).first()
+                            if team_obj:
+                                team_obj.name = new_team_name
+                                
+                                matches_as_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
+                                for m in matches_as_a:
+                                    m.team_a = new_team_name
+                                    
+                                matches_as_b = db.query(MatchHistory).filter(MatchHistory.team_b == old_team_selection).all()
+                                for m in matches_as_b:
+                                    m.team_b = new_team_name
+                                    
+                                db.commit()
+                                st.success(f"✅ Successfully rebranded '{old_team_selection}' to '{new_team_name}'!")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error during rebrand execution: {e}")
+                        finally:
+                            db.close()
+            
+            elif manage_mode == "Deep Database Merge (Combine Duplicates)":
+                target_team_selection = st.selectbox("Select Target Team to Merge Records Into:", [name for name in team_names_list if name != old_team_selection])
+                st.warning(f"⚠️ Warning: This will move all match histories from '{old_team_selection}' over to '{target_team_selection}', add up their total records, and delete the '{old_team_selection}' entry permanently.")
+                
+                if st.button("🔗 Execute Deep Database Merge Pipeline", use_container_width=True):
                     db = SessionLocal()
                     try:
-                        team_obj = db.query(Team).filter(Team.name == old_team_selection).first()
-                        if team_obj:
-                            team_obj.name = new_team_name
+                        source_obj = db.query(Team).filter(Team.name == old_team_selection).first()
+                        target_obj = db.query(Team).filter(Team.name == target_team_selection).first()
+                        
+                        if source_obj and target_obj:
+                            # 1. Update match logs histories where team acted as team_a
+                            matches_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
+                            for m in matches_a:
+                                m.team_a = target_team_selection
+                                
+                            # 2. Update match logs histories where team acted as team_b
+                            matches_b = db.query(MatchHistory).filter(MatchHistory.team_b == old_team_selection).all()
+                            for m in matches_b:
+                                m.team_b = target_team_selection
+                                
+                            # 3. Sum up the historical statistics records
+                            target_obj.wins += source_obj.wins
+                            target_obj.losses += source_obj.losses
                             
-                            matches_as_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
-                            for m in matches_as_a:
-                                m.team_a = new_team_name
-                                
-                            matches_as_b = db.query(MatchHistory).filter(MatchHistory.team_b == old_team_selection).all()
-                            for m in matches_as_b:
-                                m.team_b = new_team_name
-                                
+                            # 4. Wipe out the duplicate source table registration row
+                            db.delete(source_obj)
                             db.commit()
-                            st.success(f"✅ Successfully rebranded '{old_team_selection}' to '{new_team_name}'!")
+                            st.success(f"✅ Merged completely! Everything shifted into '{target_team_selection}'.")
                             st.rerun()
                     except Exception as e:
-                        st.error(f"Error during rebrand execution: {e}")
+                        st.error(f"Error during deep merge execution: {e}")
                     finally:
                         db.close()
                     
     with col2:
-        # New Feature: Custom Standings Date Input Controls
         st.subheader("📅 Update Leaderboard Date Context")
         user_date_text = st.text_input("Standings 'As Of' Date Label:", value=LEADERBOARD_DATE, placeholder="e.g. March 2026, Post MPL Week 3")
         if st.button("💾 Save Leaderboard Date Stamp", use_container_width=True):
