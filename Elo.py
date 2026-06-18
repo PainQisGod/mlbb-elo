@@ -1,6 +1,8 @@
 # Elo.py
 import datetime
+import pandas as pd
 import streamlit as st
+import io
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, desc, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -42,6 +44,12 @@ class MatchHistory(Base):
     stage = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
+# New table to store dynamic app configurations like the leaderboard date
+class AppConfig(Base):
+    __tablename__ = "app_config"
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
+
 # --- SAFE STRUCTURE AUTO-REPAIR ---
 inspector = inspect(engine)
 if "match_history" in inspector.get_table_names():
@@ -51,12 +59,17 @@ if "match_history" in inspector.get_table_names():
 
 Base.metadata.create_all(bind=engine)
 
-# Seed default leagues if empty
+# Seed default settings if empty
 db = SessionLocal()
 if db.query(League).count() == 0:
     default_leagues = ["MPL Indonesia", "MPL Cambodia", "MPL Philippines", "MPL Malaysia", "International / Other"]
     for lg in default_leagues:
         db.add(League(name=lg))
+    db.commit()
+
+# Default date initialization if missing
+if db.query(AppConfig).filter(AppConfig.key == "leaderboard_date").count() == 0:
+    db.add(AppConfig(key="leaderboard_date", value=datetime.date.today().strftime("%B %d, %Y")))
     db.commit()
 db.close()
 
@@ -114,6 +127,9 @@ all_leagues_db = db.query(League).order_by(League.name).all()
 LEAGUE_OPTIONS = [lg.name for lg in all_leagues_db]
 all_registered_teams = db.query(Team).order_by(Team.name).all()
 team_names_list = [team.name for team in all_registered_teams]
+# Fetch the saved leaderboard date
+saved_date_obj = db.query(AppConfig).filter(AppConfig.key == "leaderboard_date").first()
+LEADERBOARD_DATE = saved_date_obj.value if saved_date_obj else "Unknown"
 db.close()
 
 # ==========================================
@@ -122,7 +138,7 @@ db.close()
 
 if app_mode == "📊 Public Dashboard":
     st.title("🏆 MLBB Esports Elo Standings")
-    st.markdown("##### *Only professional league and international tournaments count*")
+    st.markdown(f"##### *Dynamic power rankings data up to date as of: **{LEADERBOARD_DATE}***")
     st.caption("Real-time team dynamic power rankings and global match log histories.")
     
     db = SessionLocal()
@@ -203,67 +219,155 @@ if app_mode == "📊 Public Dashboard":
                 st.error("❌ Invalid password token.")
 
 elif app_mode == "🧮 Elo Match Calculator":
-    st.title("🧮 Dynamic Elo Match Calculator")
+    st.title("🧮 Elo Match Calculator & Bulk Loader")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("🔵 Team A (Home)")
-        team_a_name = st.text_input("Team A Name", placeholder="e.g. RRQ Hoshi").strip()
-        league_a = st.selectbox("Team A League", LEAGUE_OPTIONS, key="l_a")
-        score_a = st.number_input("Team A Maps Won", min_value=0, max_value=4, value=0, key="s_a")
-        
-    with col2:
-        st.subheader("🔴 Team B (Away)")
-        team_b_name = st.text_input("Team B Name", placeholder="e.g. See You Soon").strip()
-        league_b = st.selectbox("Team B League", LEAGUE_OPTIONS, key="l_b")
-        score_b = st.number_input("Team B Maps Won", min_value=0, max_value=4, value=0, key="s_b")
-        
-    st.markdown("---")
-    match_stage = st.selectbox("Tournament Context", ["REGULAR_SEASON", "PLAYOFFS", "INTERNATIONAL"])
+    calc_tab1, calc_tab2 = st.tabs(["📝 Single Manual Entry", "📋 Paste Raw Text Logs"])
     
-    if st.button("💾 Run Calculation & Save History", use_container_width=True):
-        if not team_a_name or not team_b_name:
-            st.error("❌ Both team names must be entered.")
-        else:
-            db = SessionLocal()
-            try:
-                t_a = db.query(Team).filter(Team.name == team_a_name).first()
-                if not t_a:
-                    t_a = Team(name=team_a_name, region=league_a, current_elo=1500.0)
-                    db.add(t_a); db.flush()
+    with calc_tab1:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("🔵 Team A (Home)")
+            team_a_name = st.text_input("Team A Name", placeholder="e.g. RRQ Hoshi").strip()
+            league_a = st.selectbox("Team A League", LEAGUE_OPTIONS, key="l_a")
+            score_a = st.number_input("Team A Maps Won", min_value=0, max_value=4, value=0, key="s_a")
+            
+        with col2:
+            st.subheader("🔴 Team B (Away)")
+            team_b_name = st.text_input("Team B Name", placeholder="e.g. See You Soon").strip()
+            league_b = st.selectbox("Team B League", LEAGUE_OPTIONS, key="l_b")
+            score_b = st.number_input("Team B Maps Won", min_value=0, max_value=4, value=0, key="s_b")
+            
+        st.markdown("---")
+        match_stage = st.selectbox("Tournament Context", ["REGULAR_SEASON", "PLAYOFFS", "INTERNATIONAL"])
+        
+        if st.button("💾 Run Calculation & Save History", use_container_width=True):
+            if not team_a_name or not team_b_name:
+                st.error("❌ Both team names must be entered.")
+            else:
+                db = SessionLocal()
+                try:
+                    t_a = db.query(Team).filter(Team.name == team_a_name).first()
+                    if not t_a:
+                        t_a = Team(name=team_a_name, region=league_a, current_elo=1500.0)
+                        db.add(t_a); db.flush()
+                        
+                    t_b = db.query(Team).filter(Team.name == team_b_name).first()
+                    if not t_b:
+                        t_b = Team(name=team_b_name, region=league_b, current_elo=1500.0)
+                        db.add(t_b); db.flush()
                     
-                t_b = db.query(Team).filter(Team.name == team_b_name).first()
-                if not t_b:
-                    t_b = Team(name=team_b_name, region=league_b, current_elo=1500.0)
-                    db.add(t_b); db.flush()
+                    old_a, old_b = t_a.current_elo, t_b.current_elo
+                    new_elo_a, new_elo_b = calculate_elo_shift(old_a, old_b, score_a, score_b, match_stage)
+                    
+                    t_a.current_elo = new_elo_a
+                    t_b.current_elo = new_elo_b
+                    
+                    if score_a > score_b:
+                        t_a.wins += 1; t_b.losses += 1
+                    elif score_b > score_a:
+                        t_b.wins += 1; t_a.losses += 1
+                    
+                    history_entry = MatchHistory(
+                        team_a=team_a_name, team_b=team_b_name,
+                        league_a=league_a, league_b=league_b,
+                        score_a=score_a, score_b=score_b,
+                        old_elo_a=old_a, old_elo_b=old_b,
+                        new_elo_a=new_elo_a, new_elo_b=new_elo_b,
+                        stage=match_stage
+                    )
+                    db.add(history_entry)
+                    db.commit()
+                    st.success(f"🎉 Match between {team_a_name} and {team_b_name} calculated and logged!")
+                    st.rerun() 
+                except Exception as e:
+                    st.error(f"Database Exception: {e}")
+                finally:
+                    db.close()
+                    
+    with calc_tab2:
+        st.subheader("🚀 Mass Processing Module (Direct Paste)")
+        st.markdown("""
+        Copy the raw match logs block text from your chat window and paste it directly into the input area below.
+        """)
+        
+        with st.expander("📊 Show Required Header Format"):
+            st.markdown("""
+            Ensure your pasted block text begins with this exact header line:
+            ```text
+            team_a,team_b,league_a,league_b,score_a,score_b,stage
+            ```
+            """)
+            
+        pasted_data = st.text_area(
+            "Paste Raw Text Logs Data Here:", 
+            placeholder="team_a,team_b,league_a,league_b,score_a,score_b,stage\n...",
+            height=300
+        )
+        
+        if pasted_data.strip():
+            try:
+                df = pd.read_csv(io.StringIO(pasted_data.strip()))
                 
-                old_a, old_b = t_a.current_elo, t_b.current_elo
-                new_elo_a, new_elo_b = calculate_elo_shift(old_a, old_b, score_a, score_b, match_stage)
+                st.write("📋 **Previewing parsed data entries:**")
+                st.dataframe(df.head(10), use_container_width=True)
                 
-                t_a.current_elo = new_elo_a
-                t_b.current_elo = new_elo_b
+                required_cols = ["team_a", "team_b", "league_a", "league_b", "score_a", "score_b", "stage"]
+                missing_cols = [c for c in required_cols if c not in df.columns]
                 
-                if score_a > score_b:
-                    t_a.wins += 1; t_b.losses += 1
-                elif score_b > score_a:
-                    t_b.wins += 1; t_a.losses += 1
-                
-                history_entry = MatchHistory(
-                    team_a=team_a_name, team_b=team_b_name,
-                    league_a=league_a, league_b=league_b,
-                    score_a=score_a, score_b=score_b,
-                    old_elo_a=old_a, old_elo_b=old_b,
-                    new_elo_a=new_elo_a, new_elo_b=new_elo_b,
-                    stage=match_stage
-                )
-                db.add(history_entry)
-                db.commit()
-                st.success(f"🎉 Match between {team_a_name} and {team_b_name} calculated and logged successfully!")
-                st.rerun() 
+                if missing_cols:
+                    st.error(f"❌ Missing required formatting headers: {missing_cols}")
+                else:
+                    if st.button("⚡ Execute Bulk Process Pipeline", use_container_width=True):
+                        db = SessionLocal()
+                        success_count = 0
+                        
+                        for idx, row in df.iterrows():
+                            ta_name = str(row['team_a']).strip()
+                            tb_name = str(row['team_b']).strip()
+                            lg_a = str(row['league_a']).strip()
+                            lg_b = str(row['league_b']).strip()
+                            sc_a = int(row['score_a'])
+                            sc_b = int(row['score_b'])
+                            stg = str(row['stage']).strip().upper()
+                            
+                            t_a = db.query(Team).filter(Team.name == ta_name).first()
+                            if not t_a:
+                                t_a = Team(name=ta_name, region=lg_a, current_elo=1500.0)
+                                db.add(t_a); db.flush()
+                                
+                            t_b = db.query(Team).filter(Team.name == tb_name).first()
+                            if not t_b:
+                                t_b = Team(name=tb_name, region=lg_b, current_elo=1500.0)
+                                db.add(t_b); db.flush()
+                                
+                            old_a, old_b = t_a.current_elo, t_b.current_elo
+                            new_elo_a, new_elo_b = calculate_elo_shift(old_a, old_b, sc_a, sc_b, stg)
+                            
+                            t_a.current_elo = new_elo_a
+                            t_b.current_elo = new_elo_b
+                            
+                            if sc_a > sc_b:
+                                t_a.wins += 1; t_b.losses += 1
+                            elif sc_b > sc_a:
+                                t_b.wins += 1; t_a.losses += 1
+                                
+                            history_entry = MatchHistory(
+                                team_a=ta_name, team_b=tb_name,
+                                league_a=lg_a, league_b=lg_b,
+                                score_a=sc_a, score_b=sc_b,
+                                old_elo_a=old_a, old_elo_b=old_b,
+                                new_elo_a=new_elo_a, new_elo_b=new_elo_b,
+                                stage=stg
+                            )
+                            db.add(history_entry)
+                            success_count += 1
+                            
+                        db.commit()
+                        db.close()
+                        st.success(f"🚀 Successfully processed {success_count} matches directly from text paste!")
+                        st.rerun()
             except Exception as e:
-                st.error(f"Database Exception: {e}")
-            finally:
-                db.close()
+                st.error(f"❌ Error decoding text lines: {e}")
 
 elif app_mode == "⚙️ League & Team Management":
     st.title("⚙️ League & Team Management Console")
@@ -291,7 +395,6 @@ elif app_mode == "⚙️ League & Team Management":
                     
         st.markdown("---")
         
-        # New Feature: Team Rebranding Module
         st.subheader("📝 Rebrand/Rename Registered Team")
         if not team_names_list:
             st.info("No registered teams available to modify.")
@@ -307,12 +410,10 @@ elif app_mode == "⚙️ League & Team Management":
                 else:
                     db = SessionLocal()
                     try:
-                        # 1. Update the Team's master record
                         team_obj = db.query(Team).filter(Team.name == old_team_selection).first()
                         if team_obj:
                             team_obj.name = new_team_name
                             
-                            # 2. Update historical logs matching old name so matches aren't lost
                             matches_as_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
                             for m in matches_as_a:
                                 m.team_a = new_team_name
@@ -330,6 +431,20 @@ elif app_mode == "⚙️ League & Team Management":
                         db.close()
                     
     with col2:
+        # New Feature: Custom Standings Date Input Controls
+        st.subheader("📅 Update Leaderboard Date Context")
+        user_date_text = st.text_input("Standings 'As Of' Date Label:", value=LEADERBOARD_DATE, placeholder="e.g. March 2026, Post MPL Week 3")
+        if st.button("💾 Save Leaderboard Date Stamp", use_container_width=True):
+            db = SessionLocal()
+            config_obj = db.query(AppConfig).filter(AppConfig.key == "leaderboard_date").first()
+            if config_obj:
+                config_obj.value = user_date_text
+                db.commit()
+                st.success("✅ Main leaderboard date description successfully updated!")
+                st.rerun()
+            db.close()
+            
+        st.markdown("---")
         st.subheader("🗑️ Database Purge Panel")
         if not team_names_list:
             st.info("No teams in system memory.")
