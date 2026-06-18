@@ -170,7 +170,6 @@ if app_mode == "📊 Public Dashboard":
                 if not filtered_matches:
                     st.write("No recent series logs recorded here yet.")
                 else:
-                    # Updated to only fetch the slice of top 5 latest elements
                     for m in filtered_matches[:5]:
                         st.markdown(f"""
                         > **{m.team_a}** `{m.score_a}` vs `{m.score_b}` **{m.team_b}** > *Context:* `{m.stage}` | {m.timestamp.strftime('%Y-%m-%d %H:%M')}  
@@ -289,6 +288,46 @@ elif app_mode == "⚙️ League & Team Management":
                     st.error(f"Error: {e}")
                 finally:
                     db.close()
+                    
+        st.markdown("---")
+        
+        # New Feature: Team Rebranding Module
+        st.subheader("📝 Rebrand/Rename Registered Team")
+        if not team_names_list:
+            st.info("No registered teams available to modify.")
+        else:
+            old_team_selection = st.selectbox("Select Team to Rebrand:", team_names_list)
+            new_team_name = st.text_input("Enter New Name Designation:", placeholder="e.g. Fnatic ONIC").strip()
+            
+            if st.button("🔄 Apply Name Rebrand", use_container_width=True):
+                if not new_team_name:
+                    st.error("❌ New name cannot be blank.")
+                elif new_team_name in team_names_list:
+                    st.error("❌ This team name already exists in database registry.")
+                else:
+                    db = SessionLocal()
+                    try:
+                        # 1. Update the Team's master record
+                        team_obj = db.query(Team).filter(Team.name == old_team_selection).first()
+                        if team_obj:
+                            team_obj.name = new_team_name
+                            
+                            # 2. Update historical logs matching old name so matches aren't lost
+                            matches_as_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
+                            for m in matches_as_a:
+                                m.team_a = new_team_name
+                                
+                            matches_as_b = db.query(MatchHistory).filter(MatchHistory.team_b == old_team_selection).all()
+                            for m in matches_as_b:
+                                m.team_b = new_team_name
+                                
+                            db.commit()
+                            st.success(f"✅ Successfully rebranded '{old_team_selection}' to '{new_team_name}'!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error during rebrand execution: {e}")
+                    finally:
+                        db.close()
                     
     with col2:
         st.subheader("🗑️ Database Purge Panel")
