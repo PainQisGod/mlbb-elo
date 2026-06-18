@@ -404,8 +404,12 @@ elif app_mode == "⚙️ League & Team Management":
         else:
             old_team_selection = st.selectbox("Select Team to Modify:", team_names_list)
             
-            # Choose between simple text rebrand or deep database merge
-            manage_mode = st.radio("Management Type:", ["Simple Rebrand (Change Name)", "Deep Database Merge (Combine Duplicates)"])
+            # Choose between simple text rebrand, deep database merge, or region migration
+            manage_mode = st.radio("Management Type:", [
+                "Simple Rebrand (Change Name)", 
+                "Deep Database Merge (Combine Duplicates)",
+                "Change Team Region/League Assignment"
+            ])
             
             if manage_mode == "Simple Rebrand (Change Name)":
                 new_team_name = st.text_input("Enter New Name Designation:", placeholder="e.g. Fnatic ONIC").strip()
@@ -449,27 +453,46 @@ elif app_mode == "⚙️ League & Team Management":
                         target_obj = db.query(Team).filter(Team.name == target_team_selection).first()
                         
                         if source_obj and target_obj:
-                            # 1. Update match logs histories where team acted as team_a
                             matches_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
                             for m in matches_a:
                                 m.team_a = target_team_selection
                                 
-                            # 2. Update match logs histories where team acted as team_b
                             matches_b = db.query(MatchHistory).filter(MatchHistory.team_b == old_team_selection).all()
                             for m in matches_b:
                                 m.team_b = target_team_selection
                                 
-                            # 3. Sum up the historical statistics records
                             target_obj.wins += source_obj.wins
                             target_obj.losses += source_obj.losses
                             
-                            # 4. Wipe out the duplicate source table registration row
                             db.delete(source_obj)
                             db.commit()
                             st.success(f"✅ Merged completely! Everything shifted into '{target_team_selection}'.")
                             st.rerun()
                     except Exception as e:
                         st.error(f"Error during deep merge execution: {e}")
+                    finally:
+                        db.close()
+
+            elif manage_mode == "Change Team Region/League Assignment":
+                db = SessionLocal()
+                current_team_record = db.query(Team).filter(Team.name == old_team_selection).first()
+                current_region = current_team_record.region if current_team_record else "Unknown"
+                db.close()
+
+                st.info(f"📍 Current Assigned Region: **{current_region}**")
+                destination_region = st.selectbox("Select New Target Region/League Tab:", LEAGUE_OPTIONS)
+
+                if st.button("✈️ Migrate Team Region", use_container_width=True):
+                    db = SessionLocal()
+                    try:
+                        team_obj = db.query(Team).filter(Team.name == old_team_selection).first()
+                        if team_obj:
+                            team_obj.region = destination_region
+                            db.commit()
+                            st.success(f"✅ Moved '{old_team_selection}' to the **{destination_region}** leaderboard tab!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error altering region layout: {e}")
                     finally:
                         db.close()
                     
