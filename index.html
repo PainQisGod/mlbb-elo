@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MLBB Live Elo Standings</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans">
+
+    <div class="max-w-5xl mx-auto px-4 py-8">
+        <header class="mb-8 border-b border-gray-800 pb-6 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-yellow-400 to-amber-500 bg-clip-text text-transparent">
+                    MLBB ELO STANDINGS
+                </h1>
+                <p class="text-sm text-gray-400 mt-1">Real-time dynamic power rankings for professional teams.</p>
+            </div>
+            <button onclick="fetchStandings()" class="bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold py-2 px-4 rounded transition text-sm">
+                🔄 Refresh Rankings
+            </button>
+        </header>
+
+        <div class="bg-gray-800 rounded-lg shadow-xl overflow-hidden border border-gray-700">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-gray-700 text-gray-300 text-xs font-semibold uppercase tracking-wider">
+                        <th class="py-4 px-6 text-center w-16">Rank</th>
+                        <th class="py-4 px-6">Team Name</th>
+                        <th class="py-4 px-6 text-center">Region</th>
+                        <th class="py-4 px-6 text-center">Elo Rating</th>
+                        <th class="py-4 px-6 text-center">W / L Record</th>
+                        <th class="py-4 px-6 text-center">Reg. Rank</th>
+                    </tr>
+                </thead>
+                <tbody id="leaderboard-body" class="divide-y divide-gray-700">
+                    <tr>
+                        <td colspan="6" class="py-8 text-center text-gray-500 animate-pulse">Loading live standings...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function fetchStandings() {
+            const tbody = document.getElementById('leaderboard-body');
+            try {
+                // Fetch data from your running FastAPI app
+                const response = await fetch('http://127.0.0.1:8000/standings');
+                const data = await response.json();
+                
+                if (data.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-400">No match data recorded yet. Submit matches using Swagger to update!</td></tr>`;
+                    return;
+                }
+
+                // Map entries to row rows
+                tbody.innerHTML = data.map(team => {
+                    // Give top 3 teams a shiny rank color badge
+                    let rankBadge = team.rank;
+                    if(team.rank === 1) rankBadge = `🥇 <span class="font-bold text-yellow-400">1</span>`;
+                    if(team.rank === 2) rankBadge = `🥈 <span class="font-bold text-gray-300">2</span>`;
+                    if(team.rank === 3) rankBadge = `🥉 <span class="font-bold text-amber-600">3</span>`;
+
+                    return `
+                        <tr class="hover:bg-gray-750 transition duration-150">
+                            <td class="py-4 px-6 text-center font-medium">${rankBadge}</td>
+                            <td class="py-4 px-6 font-semibold text-white text-lg">${team.name}</td>
+                            <td class="py-4 px-6 text-center"><span class="bg-gray-900 text-xs font-bold text-gray-400 py-1 px-2.5 rounded">${team.region.toUpperCase()}</span></td>
+                            <td class="py-4 px-6 text-center font-mono font-bold text-yellow-400 text-lg">${team.elo}</td>
+                            <td class="py-4 px-6 text-center text-sm text-gray-300 font-mono">${team.record}</td>
+                            <td class="py-4 px-6 text-center text-sm text-gray-400">#${team.regional_rank}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-red-400">Could not connect to the backend server. Make sure your VS Code terminal is running!</td></tr>`;
+            }
+        }
+
+        // Auto-run on website load
+        window.onload = fetchStandings;
+    </script>
+</body>
+</html>
