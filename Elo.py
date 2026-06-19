@@ -21,6 +21,7 @@ class Team(Base):
     region = Column(String, default="International / Other")  
     current_elo = Column(Float, default=1500.0)
     wins = Column(Integer, default=0)
+    draws = Column(Integer, default=0)  # Added Draws column tracking
     losses = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)  
 
@@ -59,10 +60,12 @@ if "match_history" in inspector.get_table_names():
 
 if "teams" in inspector.get_table_names():
     columns = [c["name"] for c in inspector.get_columns("teams")]
-    if "is_active" not in columns:
-        with engine.connect() as conn:
+    with engine.connect() as conn:
+        if "is_active" not in columns:
             conn.execute(text("ALTER TABLE teams ADD COLUMN is_active BOOLEAN DEFAULT 1"))
-            conn.commit()
+        if "draws" not in columns:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN draws INTEGER DEFAULT 0"))
+        conn.commit()
 
 Base.metadata.create_all(bind=engine)
 
@@ -179,7 +182,7 @@ if app_mode == "📊 Public Dashboard":
                             "Status": "🟢 Active" if t.is_active else "🔴 Inactive",
                             "League / Region": t.region,
                             "Elo Metric": t.current_elo,
-                            "Record Details": f"{t.wins}W - {t.losses}L"
+                            "Record Details": f"{t.wins}W - {t.draws}D - {t.losses}L"  # Display format updated
                         })
                     st.dataframe(table_rows, use_container_width=True, hide_index=True)
             
@@ -269,10 +272,13 @@ elif app_mode == "🧮 Elo Match Calculator":
                     t_a.current_elo = new_elo_a
                     t_b.current_elo = new_elo_b
                     
+                    # Logic branch supporting Draw tracking parameters
                     if score_a > score_b:
                         t_a.wins += 1; t_b.losses += 1
                     elif score_b > score_a:
                         t_b.wins += 1; t_a.losses += 1
+                    else:
+                        t_a.draws += 1; t_b.draws += 1
                     
                     history_entry = MatchHistory(
                         team_a=team_a_name, team_b=team_b_name,
@@ -329,9 +335,6 @@ elif app_mode == "🧮 Elo Match Calculator":
                         success_count = 0
                         
                         for idx, row in df.iterrows():
-                            if int(row['score_a']) == int(row['score_b']):
-                                continue
-                                
                             ta_name = str(row['team_a']).strip()
                             tb_name = str(row['team_b']).strip()
                             lg_a = str(row['league_a']).strip()
@@ -360,6 +363,8 @@ elif app_mode == "🧮 Elo Match Calculator":
                                 t_a.wins += 1; t_b.losses += 1
                             elif sc_b > sc_a:
                                 t_b.wins += 1; t_a.losses += 1
+                            else:
+                                t_a.draws += 1; t_b.draws += 1
                                 
                             history_entry = MatchHistory(
                                 team_a=ta_name, team_b=tb_name,
@@ -491,8 +496,8 @@ elif app_mode == "⚙️ League & Team Management":
                             for m in matches_b:
                                 m.team_b = target_team_selection
                                 
-                            source_games = source_obj.wins + source_obj.losses
-                            target_games = target_obj.wins + target_obj.losses
+                            source_games = source_obj.wins + source_obj.draws + source_obj.losses
+                            target_games = target_obj.wins + target_obj.draws + target_obj.losses
                             total_games = source_games + target_games
                             
                             if total_games > 0:
@@ -502,6 +507,7 @@ elif app_mode == "⚙️ League & Team Management":
                             
                             target_obj.current_elo = round(combined_elo, 2)
                             target_obj.wins += source_obj.wins
+                            target_obj.draws += source_obj.draws
                             target_obj.losses += source_obj.losses
                             
                             db.delete(source_obj)
@@ -552,7 +558,6 @@ elif app_mode == "⚙️ League & Team Management":
         st.markdown("---")
         st.subheader("🗑️ Database Purge Panel")
         
-        # Sub-tab separation for clean user control
         purge_type = st.radio("Select Target Registry to Delete:", ["Delete a Team Profile", "Delete a League Tab"])
         
         if purge_type == "Delete a Team Profile":
