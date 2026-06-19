@@ -3,7 +3,7 @@ import datetime
 import pandas as pd
 import streamlit as st
 import io
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, desc, inspect
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, desc, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # ==========================================
@@ -22,6 +22,7 @@ class Team(Base):
     current_elo = Column(Float, default=1500.0)
     wins = Column(Integer, default=0)
     losses = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)  # Status Parameter
 
 class League(Base):
     __tablename__ = "leagues"
@@ -44,7 +45,6 @@ class MatchHistory(Base):
     stage = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
-# New table to store dynamic app configurations like the leaderboard date
 class AppConfig(Base):
     __tablename__ = "app_config"
     key = Column(String, primary_key=True)
@@ -56,6 +56,14 @@ if "match_history" in inspector.get_table_names():
     columns = [c["name"] for c in inspector.get_columns("match_history")]
     if "team_a" not in columns:
         MatchHistory.__table__.drop(bind=engine, checkfirst=True)
+
+# Schema Migration Safeguard for existing databases using SQLAlchemy text wrapper:
+if "teams" in inspector.get_table_names():
+    columns = [c["name"] for c in inspector.get_columns("teams")]
+    if "is_active" not in columns:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN is_active BOOLEAN DEFAULT 1"))
+            conn.commit()
 
 Base.metadata.create_all(bind=engine)
 
@@ -127,7 +135,6 @@ all_leagues_db = db.query(League).order_by(League.name).all()
 LEAGUE_OPTIONS = [lg.name for lg in all_leagues_db]
 all_registered_teams = db.query(Team).order_by(Team.name).all()
 team_names_list = [team.name for team in all_registered_teams]
-# Fetch the saved leaderboard date
 saved_date_obj = db.query(AppConfig).filter(AppConfig.key == "leaderboard_date").first()
 LEADERBOARD_DATE = saved_date_obj.value if saved_date_obj else "Unknown"
 db.close()
@@ -142,6 +149,7 @@ if app_mode == "📊 Public Dashboard":
     st.caption("Real-time team dynamic power rankings and global match log histories.")
     
     db = SessionLocal()
+    # Always pull all registered teams sorted by Elo (inactive teams stay in the table)
     all_teams = db.query(Team).order_by(desc(Team.current_elo)).all()
     
     try:
@@ -152,7 +160,7 @@ if app_mode == "📊 Public Dashboard":
     db.close()
     
     if not all_teams:
-        st.info("💡 Your tracking ledger is empty. Use the Login section below to get started!")
+        st.info("💡 Your tracking ledger is empty or contains no teams.")
     else:
         tab_titles = ["🌎 Global Circuit"] + [f"🏆 {lg}" for lg in LEAGUE_OPTIONS]
         ui_tabs = st.tabs(tab_titles)
@@ -170,6 +178,7 @@ if app_mode == "📊 Public Dashboard":
                         table_rows.append({
                             "Rank": rank,
                             "Team Name": t.name,
+                            "Status": "🟢 Active" if t.is_active else "🔴 Inactive",  # Labeled here
                             "League / Region": t.region,
                             "Elo Metric": t.current_elo,
                             "Record Details": f"{t.wins}W - {t.losses}L"
@@ -248,13 +257,17 @@ elif app_mode == "🧮 Elo Match Calculator":
                 try:
                     t_a = db.query(Team).filter(Team.name == team_a_name).first()
                     if not t_a:
-                        t_a = Team(name=team_a_name, region=league_a, current_elo=1500.0)
+                        t_a = Team(name=team_a_name, region=league_a, current_elo=1500.0, is_active=True)
                         db.add(t_a); db.flush()
+                    else:
+                        t_a.is_active = True
                         
                     t_b = db.query(Team).filter(Team.name == team_b_name).first()
                     if not t_b:
-                        t_b = Team(name=team_b_name, region=league_b, current_elo=1500.0)
+                        t_b = Team(name=team_b_name, region=league_b, current_elo=1500.0, is_active=True)
                         db.add(t_b); db.flush()
+                    else:
+                        t_b.is_active = True
                     
                     old_a, old_b = t_a.current_elo, t_b.current_elo
                     new_elo_a, new_elo_b = calculate_elo_shift(old_a, old_b, score_a, score_b, match_stage)
@@ -335,13 +348,17 @@ elif app_mode == "🧮 Elo Match Calculator":
                             
                             t_a = db.query(Team).filter(Team.name == ta_name).first()
                             if not t_a:
-                                t_a = Team(name=ta_name, region=lg_a, current_elo=1500.0)
+                                t_a = Team(name=ta_name, region=lg_a, current_elo=1500.0, is_active=True)
                                 db.add(t_a); db.flush()
+                            else:
+                                t_a.is_active = True
                                 
                             t_b = db.query(Team).filter(Team.name == tb_name).first()
                             if not t_b:
-                                t_b = Team(name=tb_name, region=lg_b, current_elo=1500.0)
+                                t_b = Team(name=tb_name, region=lg_b, current_elo=1500.0, is_active=True)
                                 db.add(t_b); db.flush()
+                            else:
+                                t_b.is_active = True
                                 
                             old_a, old_b = t_a.current_elo, t_b.current_elo
                             new_elo_a, new_elo_b = calculate_elo_shift(old_a, old_b, sc_a, sc_b, stg)
@@ -398,20 +415,43 @@ elif app_mode == "⚙️ League & Team Management":
                     
         st.markdown("---")
         
-        st.subheader("📝 Rebrand or Merge Registered Team")
+        st.subheader("📝 Rebrand, Status, or Merge Registered Team")
         if not team_names_list:
             st.info("No registered teams available to modify.")
         else:
             old_team_selection = st.selectbox("Select Team to Modify:", team_names_list)
             
-            # Choose between simple text rebrand, deep database merge, or region migration
             manage_mode = st.radio("Management Type:", [
+                "Modify Active/Inactive Status",
                 "Simple Rebrand (Change Name)", 
                 "Deep Database Merge (Combine Duplicates)",
                 "Change Team Region/League Assignment"
             ])
             
-            if manage_mode == "Simple Rebrand (Change Name)":
+            if manage_mode == "Modify Active/Inactive Status":
+                db = SessionLocal()
+                team_obj = db.query(Team).filter(Team.name == old_team_selection).first()
+                current_status = team_obj.is_active if team_obj else True
+                db.close()
+                
+                st.info(f"Team: **{old_team_selection}** | Current Status: " + ("🟢 Active" if current_status else "🔴 Inactive"))
+                status_toggle = st.checkbox("Set team status to ACTIVE", value=current_status)
+                
+                if st.button("💾 Apply Status Configuration", use_container_width=True):
+                    db = SessionLocal()
+                    try:
+                        t = db.query(Team).filter(Team.name == old_team_selection).first()
+                        if t:
+                            t.is_active = status_toggle
+                            db.commit()
+                            st.success(f"✅ Adjusted team status definition for '{old_team_selection}'!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error modifying status configuration: {e}")
+                    finally:
+                        db.close()
+
+            elif manage_mode == "Simple Rebrand (Change Name)":
                 new_team_name = st.text_input("Enter New Name Designation:", placeholder="e.g. Fnatic ONIC").strip()
                 
                 if st.button("🔄 Apply Name Rebrand", use_container_width=True):
@@ -453,7 +493,6 @@ elif app_mode == "⚙️ League & Team Management":
                         target_obj = db.query(Team).filter(Team.name == target_team_selection).first()
                         
                         if source_obj and target_obj:
-                            # 1. Update Match Histories
                             matches_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
                             for m in matches_a:
                                 m.team_a = target_team_selection
@@ -462,25 +501,21 @@ elif app_mode == "⚙️ League & Team Management":
                             for m in matches_b:
                                 m.team_b = target_team_selection
                                 
-                            # 2. Calculate game weights for Elo averaging
                             source_games = source_obj.wins + source_obj.losses
                             target_games = target_obj.wins + target_obj.losses
                             total_games = source_games + target_games
                             
-                            # 3. Calculate New Combined Elo
                             if total_games > 0:
-                                # Weighted average based on number of games played
                                 combined_elo = ((source_obj.current_elo * source_games) + (target_obj.current_elo * target_games)) / total_games
                             else:
-                                # Fallback to a simple average if both teams have 0 games played
                                 combined_elo = (source_obj.current_elo + target_obj.current_elo) / 2
                             
-                            # 4. Apply changes to the target team
                             target_obj.current_elo = round(combined_elo, 2)
                             target_obj.wins += source_obj.wins
                             target_obj.losses += source_obj.losses
                             
-                            # 5. Delete the duplicate source team entry
+                            target_obj.is_active = target_obj.is_active or source_obj.is_active
+                            
                             db.delete(source_obj)
                             db.commit()
                             st.success(f"✅ Merged completely! New combined Elo: {target_obj.current_elo}. Everything shifted into '{target_team_selection}'.")
