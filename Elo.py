@@ -444,7 +444,7 @@ elif app_mode == "⚙️ League & Team Management":
             
             elif manage_mode == "Deep Database Merge (Combine Duplicates)":
                 target_team_selection = st.selectbox("Select Target Team to Merge Records Into:", [name for name in team_names_list if name != old_team_selection])
-                st.warning(f"⚠️ Warning: This will move all match histories from '{old_team_selection}' over to '{target_team_selection}', add up their total records, and delete the '{old_team_selection}' entry permanently.")
+                st.warning(f"⚠️ Warning: This will move all match histories from '{old_team_selection}' over to '{target_team_selection}', calculate a weighted average of their Elo ratings, combine their win/loss stats, and delete the '{old_team_selection}' entry permanently.")
                 
                 if st.button("🔗 Execute Deep Database Merge Pipeline", use_container_width=True):
                     db = SessionLocal()
@@ -453,6 +453,7 @@ elif app_mode == "⚙️ League & Team Management":
                         target_obj = db.query(Team).filter(Team.name == target_team_selection).first()
                         
                         if source_obj and target_obj:
+                            # 1. Update Match Histories
                             matches_a = db.query(MatchHistory).filter(MatchHistory.team_a == old_team_selection).all()
                             for m in matches_a:
                                 m.team_a = target_team_selection
@@ -461,12 +462,28 @@ elif app_mode == "⚙️ League & Team Management":
                             for m in matches_b:
                                 m.team_b = target_team_selection
                                 
+                            # 2. Calculate game weights for Elo averaging
+                            source_games = source_obj.wins + source_obj.losses
+                            target_games = target_obj.wins + target_obj.losses
+                            total_games = source_games + target_games
+                            
+                            # 3. Calculate New Combined Elo
+                            if total_games > 0:
+                                # Weighted average based on number of games played
+                                combined_elo = ((source_obj.current_elo * source_games) + (target_obj.current_elo * target_games)) / total_games
+                            else:
+                                # Fallback to a simple average if both teams have 0 games played
+                                combined_elo = (source_obj.current_elo + target_obj.current_elo) / 2
+                            
+                            # 4. Apply changes to the target team
+                            target_obj.current_elo = round(combined_elo, 2)
                             target_obj.wins += source_obj.wins
                             target_obj.losses += source_obj.losses
                             
+                            # 5. Delete the duplicate source team entry
                             db.delete(source_obj)
                             db.commit()
-                            st.success(f"✅ Merged completely! Everything shifted into '{target_team_selection}'.")
+                            st.success(f"✅ Merged completely! New combined Elo: {target_obj.current_elo}. Everything shifted into '{target_team_selection}'.")
                             st.rerun()
                     except Exception as e:
                         st.error(f"Error during deep merge execution: {e}")
