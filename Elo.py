@@ -22,7 +22,7 @@ class Team(Base):
     current_elo = Column(Float, default=1500.0)
     wins = Column(Integer, default=0)
     losses = Column(Integer, default=0)
-    is_active = Column(Boolean, default=True)  # Status Parameter
+    is_active = Column(Boolean, default=True)  
 
 class League(Base):
     __tablename__ = "leagues"
@@ -57,7 +57,6 @@ if "match_history" in inspector.get_table_names():
     if "team_a" not in columns:
         MatchHistory.__table__.drop(bind=engine, checkfirst=True)
 
-# Schema Migration Safeguard for existing databases (FIXED with text() wrapper):
 if "teams" in inspector.get_table_names():
     columns = [c["name"] for c in inspector.get_columns("teams")]
     if "is_active" not in columns:
@@ -75,7 +74,6 @@ if db.query(League).count() == 0:
         db.add(League(name=lg))
     db.commit()
 
-# Default date initialization if missing
 if db.query(AppConfig).filter(AppConfig.key == "leaderboard_date").count() == 0:
     db.add(AppConfig(key="leaderboard_date", value=datetime.date.today().strftime("%B %d, %Y")))
     db.commit()
@@ -146,7 +144,6 @@ db.close()
 if app_mode == "📊 Public Dashboard":
     st.title("🏆 MLBB Esports Elo Standings")
     st.markdown(f"##### *Dynamic power rankings data up to date as of: **{LEADERBOARD_DATE}***")
-    # Updated text baseline context exactly as specified
     st.markdown("##### *Data collecting from 2023 Split 1 onward*") 
     st.caption("Real-time team dynamic power rankings and global match log histories.")
     
@@ -554,22 +551,49 @@ elif app_mode == "⚙️ League & Team Management":
             
         st.markdown("---")
         st.subheader("🗑️ Database Purge Panel")
-        if not team_names_list:
-            st.info("No teams in system memory.")
-        else:
-            target_team_to_remove = st.selectbox("Select Profile to Delete:", team_names_list)
-            confirm_deletion = st.checkbox(f"Confirm permanent deletion.")
-            if st.button("❌ Wipe Team"):
-                if not confirm_deletion:
-                    st.warning("⚠️ Verify checkbox first.")
-                else:
-                    db = SessionLocal()
-                    try:
-                        db.query(Team).filter(Team.name == target_team_to_remove).delete()
-                        db.commit()
-                        st.success(f"💥 Purged!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Purge fault: {e}")
-                    finally:
-                        db.close()
+        
+        # Sub-tab separation for clean user control
+        purge_type = st.radio("Select Target Registry to Delete:", ["Delete a Team Profile", "Delete a League Tab"])
+        
+        if purge_type == "Delete a Team Profile":
+            if not team_names_list:
+                st.info("No teams in system memory.")
+            else:
+                target_team_to_remove = st.selectbox("Select Team Profile to Delete:", team_names_list)
+                confirm_team_deletion = st.checkbox(f"Confirm permanent deletion of {target_team_to_remove}.")
+                if st.button("❌ Wipe Team Profile", use_container_width=True):
+                    if not confirm_team_deletion:
+                        st.warning("⚠️ Verify confirmation checkbox first.")
+                    else:
+                        db = SessionLocal()
+                        try:
+                            db.query(Team).filter(Team.name == target_team_to_remove).delete()
+                            db.commit()
+                            st.success(f"💥 Purged team record!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Purge fault: {e}")
+                        finally:
+                            db.close()
+                            
+        elif purge_type == "Delete a League Tab":
+            if not LEAGUE_OPTIONS:
+                st.info("No leagues in system memory.")
+            else:
+                target_league_to_remove = st.selectbox("Select League Tab to Delete:", LEAGUE_OPTIONS)
+                st.warning(f"⚠️ Note: Deleting the league tab won't delete the teams assigned to it, but they won't show up until you reassign them.")
+                confirm_league_deletion = st.checkbox(f"Confirm permanent deletion of tab: {target_league_to_remove}.")
+                if st.button("❌ Wipe League Tab", use_container_width=True):
+                    if not confirm_league_deletion:
+                        st.warning("⚠️ Verify confirmation checkbox first.")
+                    else:
+                        db = SessionLocal()
+                        try:
+                            db.query(League).filter(League.name == target_league_to_remove).delete()
+                            db.commit()
+                            st.success(f"💥 Purged league category!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Purge fault: {e}")
+                        finally:
+                            db.close()
