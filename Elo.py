@@ -21,7 +21,7 @@ class Team(Base):
     region = Column(String, default="International / Other")  
     current_elo = Column(Float, default=1500.0)
     wins = Column(Integer, default=0)
-    draws = Column(Integer, default=0)  # Added Draws column tracking
+    draws = Column(Integer, default=0)  
     losses = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)  
 
@@ -148,8 +148,9 @@ if app_mode == "📊 Public Dashboard":
     st.title("🏆 MLBB Esports Elo Standings")
     st.markdown(f"##### *Dynamic power rankings data up to date as of: **{LEADERBOARD_DATE}***")
     st.markdown("##### *Data collecting from 2023 Split 1 onward*") 
-    st.caption("##### *Club: Only official professional leagues and international events are counted*")
-    st.caption("##### *National Team: Every tournaments are counted*")
+    st.markdown("##### *Club: Only official professional leagues and international events are counted*")
+    st.markdown("##### *National Team: Every tournaments are counted*")
+    st.caption("Real-time team dynamic power rankings and global match log histories.")
     
     db = SessionLocal()
     all_teams = db.query(Team).order_by(desc(Team.current_elo)).all()
@@ -183,7 +184,7 @@ if app_mode == "📊 Public Dashboard":
                             "Status": "🟢 Active" if t.is_active else "🔴 Inactive",
                             "League / Region": t.region,
                             "Elo Metric": t.current_elo,
-                            "Record Details": f"{t.wins}W - {t.draws}D - {t.losses}L"  # Display format updated
+                            "Record Details": f"{t.wins}W - {t.draws}D - {t.losses}L"
                         })
                     st.dataframe(table_rows, use_container_width=True, hide_index=True)
             
@@ -232,7 +233,8 @@ if app_mode == "📊 Public Dashboard":
 elif app_mode == "🧮 Elo Match Calculator":
     st.title("🧮 Elo Match Calculator & Bulk Loader")
     
-    calc_tab1, calc_tab2 = st.tabs(["📝 Single Manual Entry", "📋 Paste Raw Text Logs"])
+    # Created 3 tabs instead of 2 to house the Bulk Revert parser cleanly
+    calc_tab1, calc_tab2, calc_tab3 = st.tabs(["📝 Single Manual Entry", "📋 Paste Raw Text Logs", "⏪ Bulk Revert Module"])
     
     with calc_tab1:
         col1, col2 = st.columns(2)
@@ -273,7 +275,6 @@ elif app_mode == "🧮 Elo Match Calculator":
                     t_a.current_elo = new_elo_a
                     t_b.current_elo = new_elo_b
                     
-                    # Logic branch supporting Draw tracking parameters
                     if score_a > score_b:
                         t_a.wins += 1; t_b.losses += 1
                     elif score_b > score_a:
@@ -315,7 +316,8 @@ elif app_mode == "🧮 Elo Match Calculator":
         pasted_data = st.text_area(
             "Paste Raw Text Logs Data Here:", 
             placeholder="team_a,team_b,league_a,league_b,score_a,score_b,stage\n...",
-            height=300
+            height=300,
+            key="bulk_upload_input"
         )
         
         if pasted_data.strip():
@@ -384,6 +386,77 @@ elif app_mode == "🧮 Elo Match Calculator":
                         st.rerun()
             except Exception as e:
                 st.error(f"❌ Error decoding text lines: {e}")
+
+    with calc_tab3:
+        st.subheader("⏪ Bulk Revert Module")
+        st.markdown("""
+        Paste a previously uploaded match logs block here to **unwind** all Elo modifications and stats. 
+        The script will read the lines, trace them back, restore older Elo positions, and delete records from your history tracker.
+        """)
+        
+        revert_data = st.text_area(
+            "Paste Text Block To Revert/Rollback:",
+            placeholder="team_a,team_b,league_a,league_b,score_a,score_b,stage\n...",
+            height=300,
+            key="bulk_revert_input"
+        )
+        
+        if revert_data.strip():
+            try:
+                df_revert = pd.read_csv(io.StringIO(revert_data.strip()))
+                st.write("📋 **Previewing parsed entries targeted for rollback:**")
+                st.dataframe(df_revert.head(10), use_container_width=True)
+                
+                if st.button("⏪ Execute Reverse Rollback Pipeline", use_container_width=True):
+                    db = SessionLocal()
+                    revert_count = 0
+                    
+                    # CRITICAL: We loop backwards (reversed) to unwind Elo changes correctly sequence by sequence
+                    for idx, row in df_revert.iloc[::-1].iterrows():
+                        ta_name = str(row['team_a']).strip()
+                        tb_name = str(row['team_b']).strip()
+                        sc_a = int(row['score_a'])
+                        sc_b = int(row['score_b'])
+                        stg = str(row['stage']).strip().upper()
+                        
+                        # Find the match entry inside database history records
+                        match_record = db.query(MatchHistory).filter(
+                            MatchHistory.team_a == ta_name,
+                            MatchHistory.team_b == tb_name,
+                            MatchHistory.score_a == sc_a,
+                            MatchHistory.score_b == sc_b,
+                            MatchHistory.stage == stg
+                        ).order_by(desc(MatchHistory.timestamp)).first()
+                        
+                        if match_record:
+                            t_a = db.query(Team).filter(Team.name == ta_name).first()
+                            t_b = db.query(Team).filter(Team.name == tb_name).first()
+                            
+                            if t_a and t_b:
+                                # Revert back to historical Elo values prior to this specific entry match
+                                t_a.current_elo = match_record.old_elo_a
+                                t_b.current_elo = match_record.old_elo_b
+                                
+                                # Unwind win/draw/loss counts
+                                if sc_a > sc_b:
+                                    if t_a.wins > 0: t_a.wins -= 1
+                                    if t_b.losses > 0: t_b.losses -= 1
+                                elif sc_b > sc_a:
+                                    if t_b.wins > 0: t_b.wins -= 1
+                                    if t_a.losses > 0: t_a.losses -= 1
+                                else:
+                                    if t_a.draws > 0: t_a.draws -= 1
+                                    if t_b.draws > 0: t_b.draws -= 1
+                                    
+                            db.delete(match_record)
+                            revert_count += 1
+                            
+                    db.commit()
+                    db.close()
+                    st.success(f"✅ Successfully unwound and deleted {revert_count} match histories from the engine database!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error decoding rollback dataset: {e}")
 
 elif app_mode == "⚙️ League & Team Management":
     st.title("⚙️ League & Team Management Console")
@@ -559,7 +632,7 @@ elif app_mode == "⚙️ League & Team Management":
         st.markdown("---")
         st.subheader("🗑️ Database Purge Panel")
         
-        purge_type = st.radio("Select Target Registry to Delete:", ["Delete a Team Profile", "Delete a League Tab"])
+        purge_type = st.radio("Select Target Registry to Delete:", ["Delete a Team Profile", "Delete a League Tab", "Wipe All Teams (Full Reset)"])
         
         if purge_type == "Delete a Team Profile":
             if not team_names_list:
@@ -601,5 +674,35 @@ elif app_mode == "⚙️ League & Team Management":
                             st.rerun()
                         except Exception as e:
                             st.error(f"Purge fault: {e}")
+                        finally:
+                            db.close()
+
+        elif purge_type == "Wipe All Teams (Full Reset)":
+            st.error("⚠️ CRITICAL ACTION: This option completely wipes EVERY team profile and record from the database framework.")
+            
+            try:
+                current_host = st.context.headers.get("Host", "")
+            except Exception:
+                current_host = "localhost"
+            
+            is_localhost = "localhost" in current_host or "127.0.0.1" in current_host
+
+            if not is_localhost:
+                st.warning("🔒 This reset module is locked in Production Mode. It can only be executed inside a Localhost environment.")
+            else:
+                confirm_all_wipe = st.checkbox("YES, I am absolutely sure I want to wipe ALL teams and reset the standings ledger.")
+                
+                if st.button("🚨 EXECUTE FULL DATABASE RESETS", use_container_width=True):
+                    if not confirm_all_wipe:
+                        st.warning("⚠️ Verify critical confirmation checkbox first.")
+                    else:
+                        db = SessionLocal()
+                        try:
+                            db.query(Team).delete()
+                            db.commit()
+                            st.success("💥 Database wiped successfully! All tracking profile elements have been reset.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Reset fault: {e}")
                         finally:
                             db.close()
