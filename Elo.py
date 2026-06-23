@@ -147,9 +147,8 @@ db.close()
 if app_mode == "📊 Public Dashboard":
     st.title("🏆 MLBB Esports Elo Standings")
     st.markdown(f"##### *Dynamic power rankings data up to date as of: **{LEADERBOARD_DATE}***")
-    st.markdown("##### *Data collecting from 2023 Split 1 onward*") 
-    st.markdown("##### *Club: Only official professional leagues and international events are counted*")
-    st.markdown("##### *National Team: Every tournaments are counted*")
+    st.markdown("##### *Club: Only official professional leagues and international events are counted (From 2023 Split 1)*")
+    st.markdown("##### *National Team: Every tournaments are counted (All times)*")
     st.caption("Real-time team dynamic power rankings and global match log histories.")
     
     db = SessionLocal()
