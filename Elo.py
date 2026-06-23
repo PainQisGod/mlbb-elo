@@ -148,7 +148,8 @@ if app_mode == "📊 Public Dashboard":
     st.title("🏆 MLBB Esports Elo Standings")
     st.markdown(f"##### *Dynamic power rankings data up to date as of: **{LEADERBOARD_DATE}***")
     st.markdown("##### *Data collecting from 2023 Split 1 onward*") 
-    st.caption("Real-time team dynamic power rankings and global match log histories.")
+    st.caption("##### *Club: Only official professional leagues and international events are counted*")
+    st.caption("##### *National Team: Every tournaments are counted*")
     
     db = SessionLocal()
     all_teams = db.query(Team).order_by(desc(Team.current_elo)).all()
